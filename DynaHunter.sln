@@ -55,8 +55,8 @@ namespace DynaHunter
             (new Vector3(1260, 25, 2860), "Dyna - Border Camp"),
             (new Vector3(1340, 25, 3060), "Dyna - Plateau Camp"),
             (new Vector3(420, 25, 1500), "Dyna - Sandworm Nest"),
-            (new Vector3(2080, 25, 2770), "Dyna - Mid PW Mantis"),
-            (new Vector3(2460, 25, 2660), "Dyna - High Mantis East"),
+
+            (new Vector3(2459.6f, 41.1f, 2659.1f), "Dyna - High Mantis East"),
             (new Vector3(2740.4f, 26.3f, 2458.7f), "Dyna - Updated Ridge Extension"),
             (new Vector3(2980, 25, 2940), "Dyna - Overrust PW"),
             (new Vector3(3100, 25, 3260), "Dyna - Peak Camp"),
@@ -130,13 +130,16 @@ namespace DynaHunter
             }
         }
 
-        // Y coordinate is now always 74 for flying
+        // Y coordinate handling: always 74 except for Dyna - High Mantis East
         private Vector3 GetSafeDestination(Vector3 dest, bool isLandmark)
         {
             Random rand = new Random();
             float xOffset = isLandmark ? ((float)rand.NextDouble() - 0.5f) * 2f : 0f;
             float zOffset = isLandmark ? ((float)rand.NextDouble() - 0.5f) * 2f : 0f;
-            float safeY = 74f; // Always fly at altitude 74
+
+            // Dyna - High Mantis East special altitude
+            bool isSpecialLandmark = Math.Abs(dest.X - 2459.6f) < 2f && Math.Abs(dest.Y - 41.1f) < 2f && Math.Abs(dest.Z - 2659.1f) < 2f;
+            float safeY = isSpecialLandmark ? dest.Y : 74f;
             return new Vector3(dest.X + xOffset, safeY, dest.Z + zOffset);
         }
 
