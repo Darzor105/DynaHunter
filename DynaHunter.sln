@@ -1,31 +1,308 @@
-﻿
-Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.14.36310.24 d17.14
-MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DynaHunter", "DynaHunter\DynaHunter.csproj", "{328A1DF6-8564-44C1-B30F-41B1F032FD75}"
-EndProject
-Global
-	GlobalSection(SolutionConfigurationPlatforms) = preSolution
-		Debug|Any CPU = Debug|Any CPU
-		Debug|x86 = Debug|x86
-		Release|Any CPU = Release|Any CPU
-		Release|x86 = Release|x86
-	EndGlobalSection
-	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{328A1DF6-8564-44C1-B30F-41B1F032FD75}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{328A1DF6-8564-44C1-B30F-41B1F032FD75}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{328A1DF6-8564-44C1-B30F-41B1F032FD75}.Debug|x86.ActiveCfg = Debug|x86
-		{328A1DF6-8564-44C1-B30F-41B1F032FD75}.Debug|x86.Build.0 = Debug|x86
-		{328A1DF6-8564-44C1-B30F-41B1F032FD75}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{328A1DF6-8564-44C1-B30F-41B1F032FD75}.Release|Any CPU.Build.0 = Release|Any CPU
-		{328A1DF6-8564-44C1-B30F-41B1F032FD75}.Release|x86.ActiveCfg = Release|x86
-		{328A1DF6-8564-44C1-B30F-41B1F032FD75}.Release|x86.Build.0 = Release|x86
-	EndGlobalSection
-	GlobalSection(SolutionProperties) = preSolution
-		HideSolutionNode = FALSE
-	EndGlobalSection
-	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {040B4DA4-071C-49C5-979A-A0BD5E56EA17}
-	EndGlobalSection
-EndGlobal
+using AOSharp.Common.GameData;
+using AOSharp.Core;
+using AOSharp.Core.Inventory;
+using AOSharp.Core.Movement;
+using AOSharp.Core.Misc;
+using AOSharp.Core.GameData;
+using AOSharp.Core.UI;
+using System;
+using System.Linq;
+using System.Collections.Generic;
+
+namespace DynaHunter
+{
+    public class DynaHunter : AOPluginEntry
+    {
+        private bool _huntingEnabled = false;
+        private double _nextMoveTime = 0;
+        private bool _debugMode = false;
+
+        private Vector3 _lastPosition = Vector3.Zero;
+        private double _lastPositionCheckTime = 0;
+        private int _stuckCounter = 0;
+
+        private const float MinMoveDistance = 1.0f;
+        private const float AtLandmarkDistance = 5.0f;
+        private const float StuckThreshold = 0.5f;
+        private const int StuckLimit = 3;
+
+        private (Vector3 pos, string name) _currentTargetLandmark;
+        private double _landmarkArrivalEstimateTime = 0;
+        private bool _phasefrontCancelScheduled = false;
+        private bool _phasefrontCancelled = false;
+
+        // Add a list of landmark names or positions to skip killing at if no dyna present
+        private readonly HashSet<string> _skipKillLandmarks = new HashSet<string>
+        {
+            // Add landmark names or positions here that should skip killing if no Dyna
+            // Example: "Dyna - Sandworm Nest",
+            // Example: "Dyna - Deep Canyon"
+            // For position-based skip, add logic below
+        };
+
+        private readonly List<(Vector3 pos, string name)> _rkLandmarks = new List<(Vector3, string)>
+        {
+            (new Vector3(1145.8f, 27.3f, 1158.7f), "Dyna - Core PW Mantis"),
+            (new Vector3(1380, 25, 1935), "Dyna - Cyborg Camp A"),
+            (new Vector3(1390, 25, 1950), "Dyna - Cyborg Camp B"),
+            (new Vector3(3060.6f, 25.1f, 920.2f), "Dyna - Anun Camp A"),
+            (new Vector3(1461.0f, 29.7f, 859.5f), "Dyna - Mantis Ridge"),
+            (new Vector3(2662.5f, 25f, 2299.4f), "Dyna - Updated East Ridge"),
+            (new Vector3(380, 25, 500), "Dyna - SW Anuns"),
+            (new Vector3(380, 25, 900), "Dyna - SW Anuns 2"),
+            (new Vector3(460, 25, 3140), "Dyna - Deep Canyon"),
+            (new Vector3(700, 25, 2460), "Dyna - Canyon Ridge"),
+            (new Vector3(1260, 25, 2860), "Dyna - Border Camp"),
+            (new Vector3(1340, 25, 3060), "Dyna - Plateau Camp"),
+            (new Vector3(420, 25, 1500), "Dyna - Sandworm Nest"),
+            (new Vector3(2080, 25, 2770), "Dyna - Mid PW Mantis"),
+            (new Vector3(2460, 25, 2660), "Dyna - High Mantis East"),
+            (new Vector3(2740.4f, 26.3f, 2458.7f), "Dyna - Updated Ridge Extension"),
+            (new Vector3(2980, 25, 2940), "Dyna - Overrust PW"),
+            (new Vector3(3100, 25, 3260), "Dyna - Peak Camp"),
+            (new Vector3(3520, 25, 2020), "Dyna - Far East Anuns"),
+            (new Vector3(2220, 25, 3340), "Dyna - Elite Mantis"),
+            (new Vector3(3940, 25, 1780), "Dyna - Sand Demon Boss"),
+            (new Vector3(3460, 25, 2940), "Dyna - Cyborg Lair"),
+            (new Vector3(3475, 25, 2980), "Dyna - Cyborg Overlord"),
+            (new Vector3(1382.1f, 30.2f, 1937.4f), "Dyna - Cyborg Commander 1"),
+            (new Vector3(1389.8f, 29.8f, 1952.1f), "Dyna - Cyborg Commander 2"),
+            (new Vector3(3942.0f, 25.0f, 1778.9f), "Dyna - Updated PW Boss"),
+            (new Vector3(3516.8f, 27.4f, 2019.5f), "Dyna - Replaced Updated Location"),
+            (new Vector3(3079.7f, 32.7f, 1927.5f), "Dyna - Mantis Spire")
+        };
+
+        public override void Run()
+        {
+            Game.OnUpdate += OnUpdate;
+            Chat.RegisterCommand("hunt", (cmd, args, window) => ToggleHunting());
+            Chat.RegisterCommand("huntdebug", (cmd, args, window) => ToggleDebug());
+            Chat.WriteLine("DynaHunter loaded. Use /hunt to start/stop. Use /huntdebug to toggle debug mode.");
+        }
+
+        public override void Teardown()
+        {
+            Game.OnUpdate -= OnUpdate;
+        }
+
+        private void ToggleHunting()
+        {
+            _huntingEnabled = !_huntingEnabled;
+            if (_huntingEnabled)
+                Chat.WriteLine("Hunting started.");
+            else
+            {
+                MovementController.Instance?.Halt();
+                DynelManager.LocalPlayer?.StopAttack();
+                Chat.WriteLine("Hunting stopped.");
+            }
+        }
+
+        private void ToggleDebug()
+        {
+            _debugMode = !_debugMode;
+            Chat.WriteLine("Debug mode: " + (_debugMode ? "ON" : "OFF"));
+        }
+
+        private bool HasPhasefrontBuff()
+        {
+            var player = DynelManager.LocalPlayer;
+            if (player?.Buffs == null) return false;
+            return player.Buffs.Any(b => b?.Name != null &&
+                (b.Name.Contains("Phasefront Wraith") || b.Name.Contains("Phasefront Banshee") || b.Name.Contains("Yalmaha")));
+        }
+
+        private void CancelPhasefrontBuff()
+        {
+            var player = DynelManager.LocalPlayer;
+            if (player?.Buffs == null) return;
+
+            var phasefrontBuff = player.Buffs.FirstOrDefault(b =>
+                b?.Name != null &&
+                (b.Name.Contains("Phasefront Wraith") ||
+                 b.Name.Contains("Phasefront Banshee") ||
+                 b.Name.Contains("Yalmaha")));
+
+            if (phasefrontBuff != null)
+            {
+                phasefrontBuff.Remove();
+                Chat.WriteLine($"Phasefront nano '{phasefrontBuff.Name}' removed from NCU.");
+            }
+        }
+
+        // Y coordinate is now always 74 for flying
+        private Vector3 GetSafeDestination(Vector3 dest, bool isLandmark)
+        {
+            Random rand = new Random();
+            float xOffset = isLandmark ? ((float)rand.NextDouble() - 0.5f) * 2f : 0f;
+            float zOffset = isLandmark ? ((float)rand.NextDouble() - 0.5f) * 2f : 0f;
+            float safeY = 74f; // Always fly at altitude 74
+            return new Vector3(dest.X + xOffset, safeY, dest.Z + zOffset);
+        }
+
+        private Vector3 Nudge(Vector3 pos)
+        {
+            Random rand = new Random();
+            float angle = (float)(rand.NextDouble() * Math.PI * 2);
+            float radius = 2.0f + (float)rand.NextDouble() * 2.0f;
+            float dx = (float)Math.Cos(angle) * radius;
+            float dz = (float)Math.Sin(angle) * radius;
+            return new Vector3(pos.X + dx, pos.Y, pos.Z + dz);
+        }
+
+        private void SafeMoveTo(Vector3 destination)
+        {
+            var player = DynelManager.LocalPlayer;
+            if (player == null)
+                return;
+            if (Vector3.Distance(player.Position, destination) > MinMoveDistance)
+                MovementController.Instance?.SetDestination(destination);
+            else if (_debugMode)
+                Chat.WriteLine($"Skipping move: destination {destination} is too close to current position {player.Position}.");
+        }
+
+        private float GetPlayerMoveSpeed()
+        {
+            // AOSharp does not expose RunSpeed property directly on LocalPlayer.
+            // Solution: Use a reasonable default.
+            return 7.0f;
+        }
+
+        private void SchedulePhasefrontCancel(Vector3 landmarkPosition, float currentDistance)
+        {
+            float speed = GetPlayerMoveSpeed();
+            double secondsToArrival = currentDistance / speed;
+            double cancelTime = Time.NormalTime + Math.Max(0, secondsToArrival - 5.0);
+            _landmarkArrivalEstimateTime = cancelTime;
+            _phasefrontCancelScheduled = true;
+            _phasefrontCancelled = false;
+            _currentTargetLandmark = (landmarkPosition, "");
+            if (_debugMode)
+                Chat.WriteLine($"Phasefront cancel scheduled in {Math.Max(0, secondsToArrival - 5.0):F1} seconds (speed={speed:F2}).");
+        }
+
+        private bool IsDynaPresentNearLandmark(Vector3 landmarkPos, float radius = 40.0f)
+        {
+            // Check for boss NPCs or mobs with high health near the landmark
+            return DynelManager.NPCs?.Any(m =>
+                m != null &&
+                !m.IsPet &&
+                m.Name != null &&
+                m.Health > 0 &&
+                Vector3.Distance(m.Position, landmarkPos) < radius
+            ) ?? false;
+        }
+
+        private void OnUpdate(object sender, float deltaTime)
+        {
+            var player = DynelManager.LocalPlayer;
+            if (!_huntingEnabled || player == null || !player.IsAlive)
+                return;
+
+            // Stuck detection
+            if (Time.NormalTime - _lastPositionCheckTime > 1.0)
+            {
+                if (Vector3.Distance(player.Position, _lastPosition) < StuckThreshold)
+                {
+                    _stuckCounter++;
+                    if (_debugMode)
+                        Chat.WriteLine($"Stuck detected at {player.Position}. Counter: {_stuckCounter}");
+                }
+                else
+                {
+                    _stuckCounter = 0;
+                }
+                _lastPosition = player.Position;
+                _lastPositionCheckTime = Time.NormalTime;
+            }
+
+            if (Time.NormalTime < _nextMoveTime)
+                return;
+
+            // Go to nearest landmark
+            var nearest = _rkLandmarks.OrderBy(l => Vector3.Distance(player.Position, l.pos)).FirstOrDefault();
+            Vector3 landmarkDest = GetSafeDestination(nearest.pos, true);
+
+            if (nearest.pos != Vector3.Zero)
+            {
+                float dist = Vector3.Distance(player.Position, landmarkDest);
+
+                // Schedule phasefront nano cancel 5 seconds before arriving at landmark
+                if (HasPhasefrontBuff() && !_phasefrontCancelScheduled)
+                {
+                    SchedulePhasefrontCancel(landmarkDest, dist);
+                }
+
+                // If scheduled cancel time is hit, do the cancel
+                if (_phasefrontCancelScheduled && !_phasefrontCancelled && Time.NormalTime >= _landmarkArrivalEstimateTime)
+                {
+                    CancelPhasefrontBuff();
+                    _phasefrontCancelled = true;
+                }
+
+                // After cancel, run rest of the way to the landmark
+                if (_phasefrontCancelled && dist > AtLandmarkDistance)
+                {
+                    SafeMoveTo(landmarkDest);
+                    if (_debugMode)
+                        Chat.WriteLine($"Running to landmark after nano cancel: {nearest.name} ({landmarkDest})");
+                    _nextMoveTime = Time.NormalTime + 2.0;
+                    return;
+                }
+                else if (dist <= AtLandmarkDistance)
+                {
+                    _phasefrontCancelScheduled = false;
+                    _phasefrontCancelled = false;
+
+                    // SKIP killing if landmark is in skip list and no dyna is present
+                    bool skipKill = _skipKillLandmarks.Contains(nearest.name) && !IsDynaPresentNearLandmark(nearest.pos);
+
+                    if (skipKill)
+                    {
+                        if (_debugMode)
+                            Chat.WriteLine($"Skipping kill at {nearest.name} - no Dyna present.");
+                        _nextMoveTime = Time.NormalTime + 2.0;
+                        return;
+                    }
+
+                    // Otherwise, attack nearby mob if present
+                    var nearbyMobs = DynelManager.NPCs?.Where(m =>
+                        m != null &&
+                        m.Position.DistanceFrom(player.Position) < 40 &&
+                        !m.IsPet &&
+                        m.Name != null &&
+                        m.Health > 0).OrderByDescending(m => m.MaxHealth).ToList();
+
+                    if (nearbyMobs?.Any() == true)
+                    {
+                        var target = nearbyMobs.First();
+                        try
+                        {
+                            if (_debugMode)
+                                Chat.WriteLine($"Attacking target: {target.Name} ({target.Health}/{target.MaxHealth})");
+                            DynelManager.LocalPlayer?.Attack(target);
+                        }
+                        catch (Exception ex)
+                        {
+                            Chat.WriteLine($"Attack failed: {ex.Message}");
+                        }
+                    }
+                    _nextMoveTime = Time.NormalTime + 2.0;
+                    return;
+                }
+
+                // If still flying, keep moving toward landmark
+                if (!_phasefrontCancelled && dist > MinMoveDistance)
+                {
+                    SafeMoveTo(landmarkDest);
+                    if (_debugMode)
+                        Chat.WriteLine($"Flying to: {nearest.name} ({landmarkDest})");
+                    _nextMoveTime = Time.NormalTime + 2.0;
+                    return;
+                }
+            }
+
+            _nextMoveTime = Time.NormalTime + 2.0;
+        }
+    }
+}
