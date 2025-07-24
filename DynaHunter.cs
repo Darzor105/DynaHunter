@@ -207,7 +207,6 @@ namespace DynaHunter
         }
 
         private bool IsDynaPresentNearLandmark(Vector3 landmarkPos, float radius = 40.0f)
-        {
             // Check for boss NPCs or mobs with high health near the landmark
             return DynelManager.NPCs?.Any(m =>
                 m != null &&
